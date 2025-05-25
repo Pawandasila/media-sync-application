@@ -8,6 +8,8 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
+mod web_server;
+
 // Protocol messages
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
@@ -40,8 +42,9 @@ pub struct MediaFile {
     pub media_type: String,
 }
 
+#[derive(Clone)]
 pub struct MediaServer {
-    media_files: Arc<Mutex<HashMap<String, MediaFile>>>,
+    pub media_files: Arc<Mutex<HashMap<String, MediaFile>>>,
     clients: Arc<Mutex<HashMap<String, Arc<Mutex<TcpStream>>>>>,
     current_media: Arc<Mutex<Option<String>>>,
     is_playing: Arc<Mutex<bool>>,
@@ -55,18 +58,28 @@ impl MediaServer {
             current_media: Arc::new(Mutex::new(None)),
             is_playing: Arc::new(Mutex::new(false)),
         }
-    }
-
-    pub fn load_media_path(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    }    pub fn load_media_path(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut media_files = self.media_files.lock().unwrap();
-        let path = Path::new(path);
         
-        if path.is_file() {
+        // Debug logging
+        println!("Loading media from path: '{}'", path);
+        println!("Path length: {}", path.len());
+        
+        let path_obj = Path::new(path);
+        
+        // Debug path information
+        println!("Path exists: {}", path_obj.exists());
+        println!("Path is file: {}", path_obj.is_file());
+        println!("Path is dir: {}", path_obj.is_dir());
+        
+        if path_obj.is_file() {
             // Handle single file
-            self.load_single_file(&mut media_files, path)?;
-        } else if path.is_dir() {
+            println!("Loading single file: {}", path);
+            self.load_single_file(&mut media_files, path_obj)?;
+        } else if path_obj.is_dir() {
             // Handle directory
-            for entry in fs::read_dir(path)? {
+            println!("Loading directory: {}", path);
+            for entry in fs::read_dir(path_obj)? {
                 let entry = entry?;
                 let file_path = entry.path();
                 
@@ -75,7 +88,9 @@ impl MediaServer {
                 }
             }
         } else {
-            return Err(format!("Path '{}' is not a valid file or directory", path.display()).into());
+            let error_msg = format!("Path '{}' is not a valid file or directory", path);
+            println!("Error: {}", error_msg);
+            return Err(error_msg.into());
         }
         
         if media_files.is_empty() {
@@ -383,6 +398,7 @@ impl MediaServer {
     }
 }
 
+#[derive(Clone)]
 pub struct MediaClient {
     server_addr: String,
     client_id: String,
@@ -609,13 +625,15 @@ impl MediaClient {
 }
 
 // Main application
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     
     if args.len() < 2 {
         println!("Usage:");
         println!("  {} server <port> <media_directory>", args[0]);
         println!("  {} client <server_ip:port> <client_id>", args[0]);
+        println!("  {} web [port]", args[0]);
         return Ok(());
     }
 
@@ -646,9 +664,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let client = MediaClient::new(server_addr, client_id);
             client.connect()?;
         }
+          "web" => {
+            println!("Starting web interface on port 3000");
+            let web_server = web_server::WebServer::new();
+            web_server.start_web_server().await?;
+        }
         
         _ => {
-            println!("Invalid command. Use 'server' or 'client'");
+            println!("Invalid command. Use 'server', 'client', or 'web'");
         }
     }
     
