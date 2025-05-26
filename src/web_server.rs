@@ -73,9 +73,9 @@ impl WebServer {
             .or(api)
             .with(warp::cors().allow_any_origin());
 
-        println!("Web server starting on http://localhost:{}", port);
+        println!("Web server starting on http://0.0.0.0:{}", port);
         warp::serve(routes)
-            .run(([127, 0, 0, 1], port))
+            .run(([0, 0, 0, 0], port))
             .await;
 
         Ok(())

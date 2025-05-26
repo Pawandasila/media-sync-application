@@ -58,7 +58,9 @@ impl MediaServer {
             current_media: Arc::new(Mutex::new(None)),
             is_playing: Arc::new(Mutex::new(false)),
         }
-    }    pub fn load_media_path(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    }
+
+    pub fn load_media_path(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut media_files = self.media_files.lock().unwrap();
         
         // Debug logging
@@ -127,12 +129,13 @@ impl MediaServer {
         Ok(())
     }
 
+    // This function now only plays on the HOST/SERVER machine
     fn play_media_on_host(filename: &str, data: &[u8], media_type: &str) -> Result<(), Box<dyn std::error::Error>> {
         // Create a temporary file for the media on the host
         let temp_file = format!("host_temp_{}", filename);
         fs::write(&temp_file, data)?;
         
-        println!("Playing media on host: {} ({} bytes, type: {})", filename, data.len(), media_type);
+        println!("Playing media on HOST: {} ({} bytes, type: {})", filename, data.len(), media_type);
         
         match media_type {
             "video" | "audio" | "image" => {
@@ -285,8 +288,9 @@ impl MediaServer {
                         .unwrap()
                         .as_secs();
                     
-                    // For large files, we might want to chunk the data
-                    // For now, we'll send the entire file
+                    println!("Client requested media: {} ({} bytes)", filename, media_file.data.len());
+                    
+                    // Send media data to the requesting client
                     let response = Message::MediaData {
                         filename: media_file.filename.clone(),
                         data: media_file.data.clone(),
@@ -294,28 +298,27 @@ impl MediaServer {
                         timestamp,
                     };
                     
-                    println!("Sending media data for: {} ({} bytes)", filename, media_file.data.len());
+                    println!("Sending media data to CLIENT for: {} ({} bytes)", filename, media_file.data.len());
                     Self::send_message(stream, &response);
                     
                     // Set as current media and start playing
                     *current_media.lock().unwrap() = Some(filename.clone());
                     *is_playing.lock().unwrap() = true;
                     
-                    // Play media on the server/host side as well
+                    // Play media ONLY on the server/host side
                     if let Err(e) = Self::play_media_on_host(&media_file.filename, &media_file.data, &media_file.media_type) {
                         eprintln!("Error playing media on host: {}", e);
                     } else {
-                        println!("Started playing {} on host", filename);
+                        println!("Started playing {} on HOST", filename);
                     }
                     
-                    // Broadcast play command to all other clients
+                    // Send play command to all OTHER clients (not the requesting one)
                     let play_command = Message::PlayCommand {
                         filename: filename.clone(),
                         timestamp,
                     };
                     Self::broadcast_to_others(clients, stream, &play_command);
                     
-                    println!("Started streaming {} to client", filename);
                 } else {
                     let response = Message::Error {
                         message: format!("Media file '{}' not found", filename),
@@ -491,12 +494,14 @@ impl MediaClient {
                 println!("Received media: {} ({} bytes, type: {}, timestamp: {})", 
                          filename, data.len(), media_type, timestamp);
                 
+                // Play media on CLIENT device
                 self.handle_media_playback(&filename, &data, &media_type, timestamp)?;
             }
             
             Message::PlayCommand { filename, timestamp } => {
                 println!("Play command received for: {} at timestamp {}", filename, timestamp);
-                // Implement synchronized playback
+                // This client should start synchronized playback
+                // (Implementation depends on your sync requirements)
             }
             
             Message::PauseCommand => {
@@ -514,16 +519,17 @@ impl MediaClient {
         Ok(())
     }
 
+    // This function now only plays on the CLIENT machine
     fn handle_media_playback(&self, filename: &str, data: &[u8], media_type: &str, _timestamp: u64) -> Result<(), Box<dyn std::error::Error>> {
-        // Create a temporary file for the media
-        let temp_file = format!("temp_{}_{}", self.client_id, filename);
+        // Create a temporary file for the media on CLIENT
+        let temp_file = format!("client_temp_{}_{}", self.client_id, filename);
         fs::write(&temp_file, data)?;
         
-        println!("Saved media to temporary file: {}", temp_file);
+        println!("Playing media on CLIENT {}: {} ({} bytes)", self.client_id, filename, data.len());
         
         match media_type {
             "video" => {
-                println!("Playing video: {} ({} bytes)", filename, data.len());
+                println!("Playing video on CLIENT: {} ({} bytes)", filename, data.len());
                 
                 #[cfg(target_os = "windows")]
                 {
@@ -548,7 +554,7 @@ impl MediaClient {
             }
             
             "audio" => {
-                println!("Playing audio: {} ({} bytes)", filename, data.len());
+                println!("Playing audio on CLIENT: {} ({} bytes)", filename, data.len());
                 
                 #[cfg(target_os = "windows")]
                 {
@@ -573,7 +579,7 @@ impl MediaClient {
             }
             
             "image" => {
-                println!("Displaying image: {} ({} bytes)", filename, data.len());
+                println!("Displaying image on CLIENT: {} ({} bytes)", filename, data.len());
                 
                 #[cfg(target_os = "windows")]
                 {
@@ -647,6 +653,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let port: u16 = args[2].parse()?;
             let media_dir = &args[3];
             
+            println!("Starting MEDIA SERVER - Media will play on HOST device");
             let server = MediaServer::new();
             server.load_media_path(media_dir)?;
             server.start_server(port)?;
@@ -661,10 +668,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let server_addr = args[2].clone();
             let client_id = args[3].clone();
             
+            println!("Starting MEDIA CLIENT - Media will play on CLIENT device");
             let client = MediaClient::new(server_addr, client_id);
             client.connect()?;
         }
-          "web" => {
+        
+        "web" => {
             println!("Starting web interface on port 3000");
             let web_server = web_server::WebServer::new();
             web_server.start_web_server().await?;
